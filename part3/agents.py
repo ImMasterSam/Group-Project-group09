@@ -107,8 +107,9 @@ class HeuristicAgent(Agent):
     A rule-based agent that drives automatically using Pure Pursuit algorithm.
     Demonstrates encapsulation of driving logic.
     """
-    def __init__(self, env):
+    def __init__(self, env, target_car="car"):
         self.env = env
+        self.target_car_attr = target_car
         self.last_idx = 0
         self.step_count = 0
     
@@ -122,7 +123,9 @@ class HeuristicAgent(Agent):
         """
         self.step_count += 1
         
-        car = self.env.car
+        # Access the target car dynamically (e.g., 'car' or 'car2')
+        car = getattr(self.env, self.target_car_attr, None)
+        
         if not car or not hasattr(self.env, 'track') or len(self.env.track) == 0:
             return np.array([0, 0, 0], dtype=np.float32)
         
@@ -225,15 +228,29 @@ class SmartAgent(Agent):
     PPO Agent using CNN.
     Auto-trains while driving.
     """
-    def __init__(self, action_space, model_path=None):
+    """
+    PPO Agent using CNN.
+    Auto-trains while driving.
+    """
+    def __init__(self, action_space, model_path=None, policy=None):
         self.action_space = action_space
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"SmartAgent initialized on device: {self.device}")
+        self.model_path = model_path
+        self.training = True
         
-        self.policy = CNNNetwork(action_dim=3).to(self.device)
+        if policy:
+             # Shared policy mode
+             self.policy = policy
+             print("Using shared policy.")
+        else:
+             self.policy = CNNNetwork(action_dim=3).to(self.device)
+        
         self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=3e-4) # Standard PPO lr
         
-        if model_path:
+        # Only load if we are NOT sharing (or if sharing, we assume main agent loaded it)
+        # Actually, if we share, we should just use the policy as is.
+        if model_path and not policy:
             self.load(model_path)
             
         # PPO Hyperparameters
@@ -241,7 +258,8 @@ class SmartAgent(Agent):
         self.gae_lambda = 0.95
         self.clip_rate = 0.2
         # Tuning: Increase entropy to force exploration (stop driving straight only)
-        self.ent_coef = 0.01 
+        # Increased to 0.05 to make the agent "try more" (User Request)
+        self.ent_coef = 0.05 
         self.vf_coef = 0.5
         self.batch_size = 64
         self.n_epochs = 10
@@ -345,8 +363,8 @@ class SmartAgent(Agent):
         # Tuning: Action Biasing
         # Brake: -5.0 bias -> Sigmoid(-5.0) ~= 0.0 (Release Brake). Cures "Riding the Brakes".
         # Gas: +0.2 bias -> Sigmoid(0.2) ~= 0.55 (Slightly press gas).
-        gas = 1 / (1 + np.exp(-(raw[1] + 0.2))) 
-        brake = 1 / (1 + np.exp(-(raw[2] - 2.0)))
+        gas = 1 / (1 + np.exp(-(raw[1] + 0.3))) 
+        brake = 1 / (1 + np.exp(-(raw[2] - 2.4)))
         
         # Optional: Add deadzone for gas/brake to avoid constant small acceleration?
         # For now, keep it smooth.
@@ -488,5 +506,18 @@ class SmartAgent(Agent):
             
         print("Training update complete.")
         self.reset_buffer()
-        self.save("smart_agent_model.pth")
 
+        
+
+        if self.model_path:
+            self.save(self.model_path)
+
+class OpponentSmartAgent(SmartAgent):
+    """
+    PPO Agent for the Opponent Car (Blue).
+    This agent learns to be aggressive or whatever objective we set for it.
+    It functions identically to SmartAgent but saves/loads a different model.
+    """
+    def __init__(self, action_space, model_path="smart_opponent_model.pth"):
+        # Initialize SmartAgent with a different model path
+        super().__init__(action_space, model_path=model_path)
